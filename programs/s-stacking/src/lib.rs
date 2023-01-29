@@ -9,31 +9,23 @@ declare_id!("AuCtWxqpFjNhHzNBJ831c7TEkwG2FQyB4G7hAsyatcMt");
 mod constants {
     use anchor_lang::prelude::Pubkey;
 
-    pub const DECIMAL: u64 = 1000000000;
-    pub const BASE_REWARD: u32 = 5;
-    pub const DAY_TIME: u32 = 86400;
     pub const STATISTIC_SEEDS: &str = "statistic";
     pub const POOL_SEEDS: &str = "pool";
     pub const POOL_DATA_SEEDS: &str = "pool data";
+    pub const ADMIN_POOL_SEEDS: &str = "admin_pool";
+    pub const FUND_SEED: &str = "fund_data_seed";
 
-    pub const START_TIME: u32 = 1669852800;
-    pub const DAYS: [u8;13] = [31, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-
+    pub const ADMIN_KEY: Pubkey = anchor_lang::solana_program::pubkey!("GQXMX2RVvuppFs2owKysJsuS686vNZpBusdgynZV86LS");
 }
 
 #[program]
-pub mod s_stacking {
+pub mod staking_test {
     use super::*;
 
-    use anchor_lang::AccountsClose;
-    
-    pub fn initialize(ctx: Context<InitializeContext>, ADMIN_KEY: Pubkey, COLLECTION_KEY: Pubkey) -> Result<()> {
+    pub fn initialize(ctx: Context<InitializeContext>) -> Result<()> {
         let a_statistic = &mut ctx.accounts.statistic;
         a_statistic.staked_count = 0;
-        a_statistic.staked_currency = 0;
 
-        a_statistic.admin_key = ADMIN_KEY;
-        a_statistic.collection_key = COLLECTION_KEY;
         Ok(())
     }
 
@@ -47,24 +39,8 @@ pub mod s_stacking {
         let a_token_from = &ctx.accounts.token_from;
         let a_token_to = &ctx.accounts.token_to;
 
-
         let m_data = &mut ctx.accounts.metadata.try_borrow_data()?;
         let metadata = mpl_token_metadata::state::Metadata::deserialize(&mut &m_data[..])?;
-
-        let collection_not_proper = metadata
-        .data
-        .creators
-        .as_ref()
-        .unwrap()
-        .iter()
-        .filter(|item|{
-            a_statistic.collection_key == item.address && item.verified
-        })
-        .count() == 0;
-
-        require!(!collection_not_proper && metadata.mint == ctx.accounts.mint.key(), CustomError::InvalidNft);
-
-        let clock = clock::Clock::get().unwrap();
 
         let cpi_ctx = CpiContext::new (
             a_token_program.to_account_info(),
@@ -84,7 +60,7 @@ pub mod s_stacking {
 
         a_pool_data.user = a_user.to_account_info().key();
         a_pool_data.mint = a_mint.to_account_info().key();
-        a_pool_data.start_time = clock.unix_timestamp as u32;
+        a_pool_data.start_time = clock.unix_timestamp as u32;  /*1671300000;*/
 
         Ok(())
     }
@@ -97,8 +73,7 @@ pub mod s_stacking {
         let a_token_from = &ctx.accounts.token_from;
         let a_token_to = &ctx.accounts.token_to;
         let a_token_program = &ctx.accounts.token_program;
-        let clock = clock::Clock::get().unwrap();
-        
+
         let (_pool, pool_bump) =
             Pubkey::find_program_address(&[
                 POOL_SEEDS.as_ref(), 
@@ -128,130 +103,78 @@ pub mod s_stacking {
         a_statistic.staked_count -= 1;
         a_pool.staked_count -= 1 ;
 
-        
-        let mut start_time = a_pool_data.start_time;
-        let current_time = clock.unix_timestamp as u32;
-        let mut end_time = START_TIME;
-
-        /*
-        for i in 0..12 {
-            end_time += DAY_TIME * DAYS[i] as u32;
-
-            if start_time <= end_time {
-                if end_time <= current_time {
-                    a_pool.total_reward += (BASE_REWARD + i as u32) as u64 * (end_time - start_time) as u64 * DECIMAL / DAY_TIME as u64;
-                    start_time = end_time;
-                }
-                else {
-                    a_pool.total_reward += (BASE_REWARD + i as u32) as u64 * (current_time - start_time) as u64 * DECIMAL / DAY_TIME as u64;
-                    break;
-                }
-            }
-        }
-        */
-
-        a_pool_data.close(a_user.to_account_info())?;
-
         Ok(())
     }
 
-    pub fn fund(ctx: Context<FundContext>, currency_amount: u64) -> Result<()> {
-        let admin = &ctx.accounts.admin;
-        let a_statistic = &mut ctx.accounts.statistic;
-        let a_pool = &mut ctx.accounts.pool;
-        let a_pool_data = &mut ctx.accounts.pool_data;
-        let a_system_program = &ctx.accounts.system_program;
-        let a_vault_from = &ctx.accounts.vault_from;
-        let a_vault_to = &ctx.accounts.vault_to;
-
-        let clock = clock::Clock::get().unwrap();
+    pub fn fund(ctx: Context<FundContext> , amount : u64 ) -> Result<()> {
+       let a_admin = &mut ctx.accounts.admin;
+       let a_fund_pool =&mut  ctx.accounts.fund_pool;
 
         let ix = anchor_lang::solana_program::system_instruction::transfer(
-            &a_vault_from.key(),
-            &a_vault_to.key(),
-            currency_amount,
+           &a_admin.key(),  &a_fund_pool.key(), amount
         );
+
         anchor_lang::solana_program::program::invoke(
-            &ix,
-            &[
-                a_vault_from.to_account_info(),
-                a_vault_from.to_account_info(),
-            ],
+            &ix,&[a_admin.to_account_info(), a_fund_pool.to_account_info() ]
         );
 
-        a_statistic.staked_currency += currency_amount;
-
-        a_pool.user = admin.to_account_info().key();
-        a_pool.staked_currency += currency_amount;
-
-        a_pool_data.user = admin.to_account_info().key();
-        a_pool_data.start_time = clock.unix_timestamp as u32;
+        // a_fund_pool.price_amount += amount;
 
         Ok(())
     }
 
-    pub fn unfund(ctx: Context<UnfundContext>, currency_amount: u64)-> Result<()> {
-        let admin = &ctx.accounts.admin;
-        let a_statistic = &mut ctx.accounts.statistic;
-        let a_pool = &mut ctx.accounts.pool;
-        let a_pool_data = &mut ctx.accounts.pool_data;
-        let a_vault_from = &ctx.accounts.vault_from;
-        let a_vault_to = &ctx.accounts.vault_to;
-        let a_system_program = &ctx.accounts.system_program;
-        let clock = clock::Clock::get().unwrap();
+    pub fn refund(ctx: Context<ReFundContext> , amount : u64 ) -> Result<()> {
+
+        **ctx.accounts.fund_pool.to_account_info().try_borrow_mut_lamports()? -= amount;
+
+        **ctx.accounts.admin.try_borrow_mut_lamports()? += amount;
+
+        // require(amount > a_fund_pool.price_amount )
+        // let a_admin = &mut ctx.accounts.admin;
+        // let a_fund_pool = &mut ctx.accounts.fund_pool;
+        // let a_system_program = &ctx.accounts.system_program;
+        // let (_pool, pool_bump) = Pubkey::find_program_address(
+        //     &[FUND_SEED.as_ref(), a_admin.to_account_info().key.as_ref()], ctx.program_id
+        // );
+
+        // let pool_seeds = &[FUND_SEED.as_ref(), a_admin.to_account_info().key.as_ref(), &[pool_bump]];
+
+        // let pool_signer = &[&pool_seeds[..]];
+
+        // let ix = anchor_lang::solana_program::system_instruction::transfer(
+        //    &a_fund_pool.key(),  &a_admin.key(), amount
+        // );
+
+        // anchor_lang::solana_program::program::invoke_signed(
+        //     &ix,&[
+        //         a_fund_pool.to_account_info().clone(), 
+        //         a_admin.to_account_info().clone(),
+        //         ctx.accounts.system_program.to_account_info().clone()
+        //          ],pool_signer
+        // )?;
+
+        // a_fund_pool.price_amount -= amount;
+
+        // let cpi_ctx = CpiContext::new_with_signer(
+        //     a_system_program.to_account_info(),
+        //     anchor_lang::system_program::Transfer {
+        //         from: a_fund_pool.to_account_info(),
+        //         to: a_admin.to_account_info(),
+        //     },
+        //     pool_signer
+        // );
+
+        // anchor_lang::system_program::transfer(cpi_ctx, amount)?;
+
+        Ok(())
+    }
+
+    pub fn distribute(ctx: Context<DistributeContext>,  index: u32) -> Result<()> {
         
-        let (_pool, pool_bump) =
-            Pubkey::find_program_address(&[
-                POOL_SEEDS.as_ref(), 
-                admin.to_account_info().key.as_ref()
-        ], ctx.program_id);
+        Ok(())
+    }
 
-        let pool_seeds = &[
-            POOL_SEEDS.as_ref(),
-            admin.to_account_info().key.as_ref(),    
-            &[pool_bump],
-        ];
-
-        let pool_signer = &[&pool_seeds[..]];
-
-        let cpi_ctx = CpiContext::new_with_signer(
-            a_system_program.to_account_info(),
-            anchor_lang::system_program::Transfer {
-                from: a_vault_from.to_account_info(),
-                to: a_vault_to.to_account_info(),
-            },
-            pool_signer
-        );
-
-        anchor_lang::system_program::transfer(cpi_ctx, currency_amount)?;
-
-        a_statistic.staked_currency -= currency_amount;
-        a_pool.staked_currency -= currency_amount ;
-
-        
-        let mut start_time = a_pool_data.start_time;
-        let current_time = clock.unix_timestamp as u32;
-        let mut end_time = START_TIME;
-
-        /*
-        for i in 0..12 {
-            end_time += DAY_TIME * DAYS[i] as u32;
-
-            if start_time <= end_time {
-                if end_time <= current_time {
-                    a_pool.total_reward += (BASE_REWARD + i as u32) as u64 * (end_time - start_time) as u64 * DECIMAL / DAY_TIME as u64;
-                    start_time = end_time;
-                }
-                else {
-                    a_pool.total_reward += (BASE_REWARD + i as u32) as u64 * (current_time - start_time) as u64 * DECIMAL / DAY_TIME as u64;
-                    break;
-                }
-            }
-        }
-        */
-
-        a_pool_data.close(admin.to_account_info())?;
-
+    pub fn claim(ctx: Context<ClaimContext>) -> Result<()> {
         Ok(())
     }
 }
@@ -260,14 +183,14 @@ pub mod s_stacking {
 pub struct InitializeContext<'info> {
     #[account(init, seeds = [STATISTIC_SEEDS.as_ref()], bump, payer = admin, space = 8 + 4)]
     pub statistic: Account<'info, Statistic>,
-    #[account(mut, constraint = admin.key() == statistic.admin_key)]
+    #[account(mut, constraint = admin.key() == ADMIN_KEY)]
     pub admin: Signer<'info>,
     pub system_program: Program<'info, System>
 }
 
 #[derive(Accounts)]
 pub struct StakeContext<'info> {
-    #[account(mut)]
+   #[account(mut)]
     pub statistic: Account<'info, Statistic>,
     #[account(init_if_needed, seeds = [POOL_SEEDS.as_ref(), user.key().as_ref()], bump, payer = user, space = 8 + 32 + 4 + 8 + 8)]
     pub pool: Account<'info, Pool>,
@@ -306,58 +229,53 @@ pub struct UnstakeContext<'info> {
 
 #[derive(Accounts)]
 pub struct FundContext<'info> {
-    #[account(mut)]
-    pub statistic: Account<'info, Statistic>,
-    #[account(init_if_needed, seeds = [POOL_SEEDS.as_ref(), admin.key().as_ref()], bump, payer = admin, space = 8 + 32 + 4 + 8 + 8)]
-    pub pool: Account<'info, Pool>,
-    #[account(init_if_needed, seeds = [POOL_DATA_SEEDS.as_ref(), admin.key().as_ref()], bump, payer = admin, space = 8 + 32 + 32 + 4)]
-    pub pool_data: Account<'info, PoolData>,
-    #[account(mut)]
-    pub admin: Signer<'info>,
     /// CHECK: it's not dangerous
-    pub metadata: AccountInfo<'info>, 
-    #[account(mut, constraint = vault_from.owner == admin.key())]
-    pub vault_from: Box<Account<'info, TokenAccount>>,
-    #[account(mut, constraint = vault_to.owner == pool.key())]
-    pub vault_to: Box<Account<'info, TokenAccount>>,
-    pub token_program: Program<'info, Token>,
+    #[account(init_if_needed, seeds = [FUND_SEED.as_ref(), admin.key().as_ref()], bump, payer = admin, space = 0)]
+    pub fund_pool : AccountInfo<'info >,
+    #[account(mut, constraint = admin.key() == ADMIN_KEY)]
+    pub admin: Signer<'info>,
     pub system_program: Program<'info, System>
 }
 
 #[derive(Accounts)]
-pub struct UnfundContext<'info> {
+pub struct ReFundContext<'info> {
+    /// CHECK: it's not dangerous
+    #[account(mut, seeds = [FUND_SEED.as_ref(), admin.key().as_ref()], bump)]
+    pub fund_pool : AccountInfo<'info >,
+    #[account(mut, constraint = admin.key() == ADMIN_KEY)]
+    pub admin: Signer<'info>,
+    pub system_program: Program<'info, System>
+}
+
+#[derive(Accounts)]
+#[instruction(bump: u32)]
+pub struct DistributeContext<'info>{
     #[account(mut)]
     pub statistic: Account<'info, Statistic>,
-    #[account(mut, constraint = pool.user == admin.key())]
-    pub pool: Account<'info, Pool>,
-    #[account(mut, constraint = pool_data.user == admin.key())]
-    pub pool_data: Account<'info, PoolData>,
-    #[account(mut)]
+    #[account(mut, constraint = admin.key() == ADMIN_KEY)]
     pub admin: Signer<'info>,
-    #[account(mut, constraint = vault_from.owner == pool.key())]
-    pub vault_from: Box<Account<'info, TokenAccount>>,
-    #[account(mut, constraint = vault_to.owner == admin.key())]
-    pub vault_to: Box<Account<'info, TokenAccount>>,
-    pub token_program: Program<'info, Token>,
+    #[account(init_if_needed, seeds = [format!("distribute{}", bump).as_ref(), admin.key().as_ref()], bump, payer = admin, space = 0)]
+    pub distribute : Account<'info, DistributeData>,
+    pub system_program: Program<'info, System>
+}
+
+#[derive(Accounts)]
+pub struct ClaimContext<'info>{
     pub system_program: Program<'info, System>
 }
 
 #[account]
 pub struct Statistic {
-    pub admin_key: Pubkey,
-    pub collection_key: Pubkey, 
-
     pub staked_count: u32,
-    pub staked_currency: u64
+    pub currency_count: u32
 }
 
 #[account]
 pub struct Pool {
     pub user: Pubkey,
     pub staked_count: u32,
-    pub staked_currency: u64,
     pub total_reward: u64,
-    pub transfer_amount: u64
+    pub transfer_amount: u64,
 }
 
 #[account]
@@ -365,6 +283,12 @@ pub struct PoolData {
     pub user: Pubkey,
     pub mint: Pubkey,
     pub start_time: u32,
+}
+
+#[account]
+pub struct DistributeData{  
+    pub rewords_amount: u32, 
+    pub start_time: u32
 }
 
 #[error_code]
